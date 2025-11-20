@@ -1,11 +1,12 @@
 import os
 import random
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from uuid import uuid4
 
-app = FastAPI(title="Math Tutor API", version="1.0.0")
+app = FastAPI(title="Math Tutor API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,6 +16,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Ensure uploads directory exists
+UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 # -----------------------------
 # Models
 # -----------------------------
@@ -23,6 +28,7 @@ class PracticeRequest(BaseModel):
     difficulty: int = Field(1, ge=1, le=5)
     count: int = Field(5, ge=1, le=20)
     seed: Optional[int] = None
+    curriculum_id: Optional[str] = Field(None, description="Optional curriculum document id to align content")
 
 class PracticeProblem(BaseModel):
     id: str
@@ -41,6 +47,15 @@ class ExplainResponse(BaseModel):
     summary: str
     key_points: List[str]
     examples: List[str]
+
+class CurriculumDoc(BaseModel):
+    id: str
+    name: str
+    level: Optional[str] = None
+    region: Optional[str] = None
+    size: int
+    pages: Optional[int] = None
+    text_preview: Optional[str] = None
 
 # -----------------------------
 # Curriculum Map
@@ -565,6 +580,107 @@ for key, data in EXPLANATIONS_DATA.items():
     EXPLANATIONS[key] = ExplainResponse(topic=key, **data)
 
 # -----------------------------
+# Curriculum Upload & Management
+# -----------------------------
+@app.post("/api/curriculum/upload", response_model=CurriculumDoc)
+async def upload_curriculum(
+    file: UploadFile = File(...),
+    level: Optional[str] = Form(None),
+    region: Optional[str] = Form(None),
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    # Save file to disk
+    file_id = str(uuid4())
+    dest_path = os.path.join(UPLOAD_DIR, f"{file_id}.pdf")
+    content = await file.read()
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    pages = None
+    text_preview = None
+
+    # Try to extract basic text preview and page count
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(dest_path)
+        pages = len(reader.pages)
+        texts = []
+        for i, page in enumerate(reader.pages[:5]):
+            txt = page.extract_text() or ""
+            if txt:
+                texts.append(txt.strip())
+        combined = "\n\n".join(texts)
+        text_preview = combined[:2000] if combined else None
+    except Exception:
+        pass
+
+    # Store metadata to database if available
+    meta = {
+        "id": file_id,
+        "name": file.filename,
+        "level": level,
+        "region": region,
+        "size": len(content),
+        "pages": pages,
+        "text_preview": text_preview,
+        "path": dest_path,
+    }
+
+    try:
+        from database import create_document
+        create_document("curriculum", meta)
+    except Exception:
+        # proceed without DB
+        pass
+
+    return CurriculumDoc(**{k: meta[k] for k in ["id", "name", "level", "region", "size", "pages", "text_preview"]})
+
+
+@app.get("/api/curriculum", response_model=List[CurriculumDoc])
+async def list_curriculum():
+    items: List[CurriculumDoc] = []
+    # Try DB first
+    try:
+        from database import get_documents
+        docs = get_documents("curriculum", {}, limit=100)
+        for d in docs:
+            items.append(CurriculumDoc(**{k: d.get(k) for k in ["id", "name", "level", "region", "size", "pages", "text_preview"] if k in d}))
+        return items
+    except Exception:
+        # Fallback: scan uploads dir
+        for fname in os.listdir(UPLOAD_DIR):
+            if fname.endswith('.pdf'):
+                fid = os.path.splitext(fname)[0]
+                path = os.path.join(UPLOAD_DIR, fname)
+                try:
+                    size = os.path.getsize(path)
+                except Exception:
+                    size = 0
+                items.append(CurriculumDoc(id=fid, name=fname, level=None, region=None, size=size, pages=None, text_preview=None))
+        return items
+
+
+@app.delete("/api/curriculum/{doc_id}")
+async def delete_curriculum(doc_id: str):
+    # remove from db if possible
+    try:
+        from database import db
+        if db is not None:
+            db["curriculum"].delete_one({"id": doc_id})
+    except Exception:
+        pass
+    # remove file
+    pdf_path = os.path.join(UPLOAD_DIR, f"{doc_id}.pdf")
+    if os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+        except Exception:
+            pass
+    return {"ok": True}
+
+# -----------------------------
 # Routes
 # -----------------------------
 @app.get("/")
@@ -593,10 +709,24 @@ def practice(req: PracticeRequest):
         raise HTTPException(status_code=400, detail="Unknown topic")
     if req.seed is not None:
         random.seed(req.seed)
+
+    curriculum_note = None
+    if req.curriculum_id:
+        # Try to fetch curriculum name for alignment note
+        try:
+            from database import db
+            doc = db["curriculum"].find_one({"id": req.curriculum_id}) if db is not None else None
+            if doc and doc.get("name"):
+                curriculum_note = f"Aligned with your uploaded course: {doc.get('name')}"
+        except Exception:
+            pass
+
     problems: List[PracticeProblem] = []
     generator = GENERATOR_MAP[req.topic]
     for i in range(req.count):
         q, a, steps = generator(req.difficulty)
+        if curriculum_note:
+            steps = [curriculum_note] + steps
         problems.append(
             PracticeProblem(
                 id=f"{req.topic}-{i}", topic=req.topic, question=q, answer=a, steps=steps
