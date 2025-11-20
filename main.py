@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from uuid import uuid4
 from datetime import datetime, timezone
 
-app = FastAPI(title="Math Tutor API", version="1.2.0")
+app = FastAPI(title="Math Tutor API", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -938,21 +938,39 @@ def quiz_submit(req: QuizSubmitRequest):
 
 @app.get("/api/report/{user}")
 def report_card(user: str):
-    summary = {"user": user, "points": 0, "quizzes": 0, "per_topic": {}, "recent": []}
+    summary: Dict[str, Any] = {"user": user, "points": 0, "quizzes": 0, "per_topic": {}, "recent": []}
     try:
         from database import db
         if db is None:
+            # No DB; return empty summary
+            summary["overall"] = {"score": 0.0, "grade": "-"}
+            summary["final_value"] = 0.0
             return summary
         cursor = db["quiz_result"].find({"user": user}).sort("created_at", -1)
         results = list(cursor)
         summary["quizzes"] = len(results)
+        total_score_sum = 0.0
         for r in results:
+            s = float(r.get("score", 0))
             summary["points"] += int(r.get("points", 0))
+            total_score_sum += s
             t = r.get("topic")
             pt = summary["per_topic"].setdefault(t, {"attempts": 0, "best": 0.0, "avg": 0.0})
             pt["attempts"] += 1
-            pt["avg"] = ((pt["avg"] * (pt["attempts"] - 1)) + float(r.get("score", 0))) / pt["attempts"]
-            pt["best"] = max(pt["best"], float(r.get("score", 0)))
+            pt["avg"] = ((pt["avg"] * (pt["attempts"] - 1)) + s) / pt["attempts"]
+            pt["best"] = max(pt["best"], s)
+        # overall average score across all quizzes
+        overall_score = (total_score_sum / summary["quizzes"]) if summary["quizzes"] else 0.0
+        # map to grade
+        def to_grade(x: float) -> str:
+            if x >= 90: return "A"
+            if x >= 80: return "B"
+            if x >= 70: return "C"
+            if x >= 60: return "D"
+            return "F"
+        summary["overall"] = {"score": overall_score, "grade": to_grade(overall_score)}
+        # final_value can be used by tutor to finalize a numeric value for report card
+        summary["final_value"] = round(overall_score, 1)
         summary["recent"] = [{
             "quiz_id": r.get("quiz_id"),
             "topic": r.get("topic"),
@@ -961,6 +979,8 @@ def report_card(user: str):
         } for r in results[:10]]
         return summary
     except Exception:
+        summary["overall"] = {"score": 0.0, "grade": "-"}
+        summary["final_value"] = 0.0
         return summary
 
 @app.get("/test")
