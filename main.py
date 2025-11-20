@@ -5,8 +5,9 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from uuid import uuid4
+from datetime import datetime, timezone
 
-app = FastAPI(title="Math Tutor API", version="1.1.0")
+app = FastAPI(title="Math Tutor API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +30,7 @@ class PracticeRequest(BaseModel):
     count: int = Field(5, ge=1, le=20)
     seed: Optional[int] = None
     curriculum_id: Optional[str] = Field(None, description="Optional curriculum document id to align content")
+    lang: str = Field("en", description="Language code: en, fa, de, fr")
 
 class PracticeProblem(BaseModel):
     id: str
@@ -57,6 +59,130 @@ class CurriculumDoc(BaseModel):
     pages: Optional[int] = None
     text_preview: Optional[str] = None
 
+class QuizStartRequest(BaseModel):
+    user: str
+    topic: str
+    difficulty: int = Field(1, ge=1, le=5)
+    count: int = Field(5, ge=1, le=20)
+    lang: str = Field("en")
+
+class QuizQuestion(BaseModel):
+    id: str
+    question: str
+
+class QuizStartResponse(BaseModel):
+    quiz_id: str
+    user: str
+    topic: str
+    lang: str
+    questions: List[QuizQuestion]
+
+class QuizSubmitRequest(BaseModel):
+    quiz_id: str
+    answers: List[Any]
+
+class QuizSubmitResponse(BaseModel):
+    quiz_id: str
+    user: str
+    topic: str
+    lang: str
+    total: int
+    correct: int
+    score: float
+    points: int
+
+# -----------------------------
+# i18n helpers
+# -----------------------------
+SUPPORTED_LANGS = {"en", "fa", "de", "fr"}
+
+TOPIC_LABELS_EN = {
+    "arithmetic_addition": "Addition",
+    "arithmetic_subtraction": "Subtraction",
+    "arithmetic_multiplication": "Multiplication",
+    "arithmetic_division": "Division",
+    "fractions_basic": "Fractions (Basics)",
+    "fractions_operations": "Fractions (Add/Subtract)",
+    "algebra_linear": "Algebra: Solve ax + b = c",
+    "ratio_proportion": "Ratios & Proportions",
+    "algebra_quadratic": "Quadratic Equations",
+    "functions_polynomial": "Polynomials",
+    "geometry_area": "Geometry: Area",
+    "calculus_derivative": "Calculus: Derivatives (Polynomials)",
+    "calculus_integral": "Calculus: Integrals (Polynomials)",
+    "linear_algebra_vectors": "Linear Algebra: Vectors (Dot Product)",
+    "linear_algebra_matrices": "Linear Algebra: Matrix Multiply (2x2)",
+    "probability_basic": "Probability: Discrete (Dice/Coin)",
+    "proof_techniques": "Proof Techniques (Concepts)",
+}
+
+TOPIC_LABELS_FA = {
+    "arithmetic_addition": "جمع",
+    "arithmetic_subtraction": "تفریق",
+    "arithmetic_multiplication": "ضرب",
+    "arithmetic_division": "تقسیم",
+    "fractions_basic": "کسرها (مقدماتی)",
+    "fractions_operations": "کسرها (جمع/تفریق)",
+    "algebra_linear": "جبر: حل ax + b = c",
+    "ratio_proportion": "نسبت و تناسب",
+    "algebra_quadratic": "معادلات درجه دوم",
+    "functions_polynomial": "چندجمله‌ای‌ها",
+    "geometry_area": "هندسه: مساحت",
+    "calculus_derivative": "حساب دیفرانسیل: مشتق‌ها",
+    "calculus_integral": "حساب انتگرال: انتگرال‌ها",
+    "linear_algebra_vectors": "جبر خطی: بردارها (ضرب داخلی)",
+    "linear_algebra_matrices": "جبر خطی: ضرب ماتریس (۲×۲)",
+    "probability_basic": "احتمال: گسسته (سکه/تاس)",
+    "proof_techniques": "روش‌های اثبات (مفاهیم)",
+}
+
+TOPIC_LABELS_DE = {
+    "arithmetic_addition": "Addition",
+    "arithmetic_subtraction": "Subtraktion",
+    "arithmetic_multiplication": "Multiplikation",
+    "arithmetic_division": "Division",
+    "fractions_basic": "Brüche (Grundlagen)",
+    "fractions_operations": "Brüche (Add/Sub)",
+    "algebra_linear": "Algebra: Löse ax + b = c",
+    "ratio_proportion": "Verhältnisse & Proportionen",
+    "algebra_quadratic": "Quadratische Gleichungen",
+    "functions_polynomial": "Polynome",
+    "geometry_area": "Geometrie: Fläche",
+    "calculus_derivative": "Analysis: Ableitungen",
+    "calculus_integral": "Analysis: Integrale",
+    "linear_algebra_vectors": "Lineare Algebra: Vektoren (Skalarprodukt)",
+    "linear_algebra_matrices": "Lineare Algebra: Matrixmultiplikation (2x2)",
+    "probability_basic": "Wahrscheinlichkeit: Diskret (Würfel/Münze)",
+    "proof_techniques": "Beweistechniken (Konzepte)",
+}
+
+TOPIC_LABELS_FR = {
+    "arithmetic_addition": "Addition",
+    "arithmetic_subtraction": "Soustraction",
+    "arithmetic_multiplication": "Multiplication",
+    "arithmetic_division": "Division",
+    "fractions_basic": "Fractions (Bases)",
+    "fractions_operations": "Fractions (Add/Sous)",
+    "algebra_linear": "Algèbre : Résoudre ax + b = c",
+    "ratio_proportion": "Rapports et Proportions",
+    "algebra_quadratic": "Équations quadratiques",
+    "functions_polynomial": "Polynômes",
+    "geometry_area": "Géométrie : Aire",
+    "calculus_derivative": "Calcul : Dérivées",
+    "calculus_integral": "Calcul : Intégrales",
+    "linear_algebra_vectors": "Algèbre linéaire : Vecteurs (Produit scalaire)",
+    "linear_algebra_matrices": "Algèbre linéaire : Multiplication de matrices (2x2)",
+    "probability_basic": "Probabilité : Discrète (Dé/Coin)",
+    "proof_techniques": "Techniques de preuve (Concepts)",
+}
+
+LANG_TOPIC_LABELS = {
+    "en": TOPIC_LABELS_EN,
+    "fa": TOPIC_LABELS_FA,
+    "de": TOPIC_LABELS_DE,
+    "fr": TOPIC_LABELS_FR,
+}
+
 # -----------------------------
 # Curriculum Map
 # -----------------------------
@@ -69,36 +195,13 @@ LEVELS = [
     "Masters",
 ]
 
-TOPICS_BY_LEVEL: Dict[str, List[Dict[str, str]]] = {
-    "2nd Grade": [
-        {"key": "arithmetic_addition", "label": "Addition"},
-        {"key": "arithmetic_subtraction", "label": "Subtraction"},
-    ],
-    "3rd-5th Grade": [
-        {"key": "arithmetic_multiplication", "label": "Multiplication"},
-        {"key": "arithmetic_division", "label": "Division"},
-        {"key": "fractions_basic", "label": "Fractions (Basics)"},
-    ],
-    "Middle School": [
-        {"key": "fractions_operations", "label": "Fractions (Add/Subtract)"},
-        {"key": "algebra_linear", "label": "Algebra: Solve ax + b = c"},
-        {"key": "ratio_proportion", "label": "Ratios & Proportions"},
-    ],
-    "High School": [
-        {"key": "algebra_quadratic", "label": "Quadratic Equations"},
-        {"key": "functions_polynomial", "label": "Polynomials"},
-        {"key": "geometry_area", "label": "Geometry: Area"},
-    ],
-    "Undergraduate": [
-        {"key": "calculus_derivative", "label": "Calculus: Derivatives (Polynomials)"},
-        {"key": "calculus_integral", "label": "Calculus: Integrals (Polynomials)"},
-        {"key": "linear_algebra_vectors", "label": "Linear Algebra: Vectors (Dot Product)"},
-        {"key": "linear_algebra_matrices", "label": "Linear Algebra: Matrix Multiply (2x2)"},
-    ],
-    "Masters": [
-        {"key": "probability_basic", "label": "Probability: Discrete (Dice/Coin)"},
-        {"key": "proof_techniques", "label": "Proof Techniques (Concepts)"},
-    ],
+TOPICS_BY_LEVEL_KEYS: Dict[str, List[str]] = {
+    "2nd Grade": ["arithmetic_addition", "arithmetic_subtraction"],
+    "3rd-5th Grade": ["arithmetic_multiplication", "arithmetic_division", "fractions_basic"],
+    "Middle School": ["fractions_operations", "algebra_linear", "ratio_proportion"],
+    "High School": ["algebra_quadratic", "functions_polynomial", "geometry_area"],
+    "Undergraduate": ["calculus_derivative", "calculus_integral", "linear_algebra_vectors", "linear_algebra_matrices"],
+    "Masters": ["probability_basic", "proof_techniques"],
 }
 
 # -----------------------------
@@ -447,8 +550,8 @@ GENERATOR_MAP = {
 
 EXPLANATIONS: Dict[str, ExplainResponse] = {}
 
-# Populate explanations with concise concept overviews
-EXPLANATIONS_DATA = {
+# Populate explanations with concise concept overviews (English source)
+EXPLANATIONS_DATA_EN = {
     "arithmetic_addition": {
         "title": "Addition",
         "summary": "Combine two or more numbers to find their total.",
@@ -576,6 +679,8 @@ EXPLANATIONS_DATA = {
     },
 }
 
+# For brevity, reuse EN content for other languages; titles will use translated topic labels
+EXPLANATIONS_DATA = EXPLANATIONS_DATA_EN
 for key, data in EXPLANATIONS_DATA.items():
     EXPLANATIONS[key] = ExplainResponse(topic=key, **data)
 
@@ -626,6 +731,7 @@ async def upload_curriculum(
         "pages": pages,
         "text_preview": text_preview,
         "path": dest_path,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     try:
@@ -688,20 +794,30 @@ def read_root():
     return {"message": "Math Tutor Backend running"}
 
 @app.get("/api/levels", response_model=List[str])
-def get_levels():
+def get_levels(lang: str = Query("en")):
+    # Levels shown in English for now; could add translation here if needed
     return LEVELS
 
 @app.get("/api/topics")
-def get_topics(level: str = Query(..., description="One of LEVELS")):
-    if level not in TOPICS_BY_LEVEL:
+def get_topics(level: str = Query(..., description="One of LEVELS"), lang: str = Query("en")):
+    if level not in TOPICS_BY_LEVEL_KEYS:
         raise HTTPException(status_code=400, detail="Unknown level")
-    return TOPICS_BY_LEVEL[level]
+    if lang not in SUPPORTED_LANGS:
+        lang = "en"
+    labels = LANG_TOPIC_LABELS.get(lang, TOPIC_LABELS_EN)
+    keys = TOPICS_BY_LEVEL_KEYS[level]
+    return [{"key": k, "label": labels.get(k, TOPIC_LABELS_EN.get(k, k))} for k in keys]
 
 @app.get("/api/explain", response_model=ExplainResponse)
-def explain(topic: str = Query(...)):
+def explain(topic: str = Query(...), lang: str = Query("en")):
     if topic not in EXPLANATIONS:
         raise HTTPException(status_code=404, detail="Explanation not found for topic")
-    return EXPLANATIONS[topic]
+    data = EXPLANATIONS[topic]
+    if lang in LANG_TOPIC_LABELS:
+        # Replace title with translated topic label, keep body for brevity
+        translated_title = LANG_TOPIC_LABELS[lang].get(topic, data.title)
+        return ExplainResponse(topic=topic, title=translated_title, summary=data.summary, key_points=data.key_points, examples=data.examples)
+    return data
 
 @app.post("/api/practice", response_model=PracticeResponse)
 def practice(req: PracticeRequest):
@@ -733,6 +849,119 @@ def practice(req: PracticeRequest):
             )
         )
     return PracticeResponse(topic=req.topic, problems=problems)
+
+# -----------------------------
+# Quiz & Report Card
+# -----------------------------
+@app.post("/api/quiz/start", response_model=QuizStartResponse)
+def quiz_start(req: QuizStartRequest):
+    if req.topic not in GENERATOR_MAP:
+        raise HTTPException(status_code=400, detail="Unknown topic")
+    quiz_id = str(uuid4())
+    gen = GENERATOR_MAP[req.topic]
+    questions = []
+    answers = []
+    for i in range(req.count):
+        q, a, _ = gen(req.difficulty)
+        qid = f"{quiz_id}-{i}"
+        questions.append({"id": qid, "question": q})
+        answers.append(a)
+
+    # Persist quiz session with correct answers
+    try:
+        from database import db
+        if db is not None:
+            db["quiz"].insert_one({
+                "id": quiz_id,
+                "user": req.user,
+                "topic": req.topic,
+                "difficulty": req.difficulty,
+                "count": req.count,
+                "lang": req.lang,
+                "questions": questions,
+                "answers": answers,
+                "created_at": datetime.now(timezone.utc)
+            })
+    except Exception:
+        pass
+
+    return QuizStartResponse(quiz_id=quiz_id, user=req.user, topic=req.topic, lang=req.lang, questions=[QuizQuestion(**q) for q in questions])
+
+@app.post("/api/quiz/submit", response_model=QuizSubmitResponse)
+def quiz_submit(req: QuizSubmitRequest):
+    try:
+        from database import db
+        doc = None
+        if db is not None:
+            doc = db["quiz"].find_one({"id": req.quiz_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Quiz session not found")
+        correct = 0
+        details = []
+        for i, user_ans in enumerate(req.answers):
+            gold = doc.get("answers", [None]*len(req.answers))[i]
+            is_correct = False
+            # tolerant comparison for numbers and arrays
+            try:
+                if isinstance(gold, (int, float)):
+                    is_correct = abs(float(user_ans) - float(gold)) < 1e-6
+                elif isinstance(gold, list):
+                    is_correct = list(user_ans) == gold
+                else:
+                    is_correct = str(user_ans).strip() == str(gold).strip()
+            except Exception:
+                is_correct = str(user_ans).strip() == str(gold).strip()
+            correct += 1 if is_correct else 0
+            details.append({"q": doc["questions"][i]["question"], "your": user_ans, "answer": gold, "correct": is_correct})
+        total = len(doc.get("questions", []))
+        score = (correct / total) * 100 if total else 0.0
+        points = int(score)
+        # Save result
+        if db is not None:
+            db["quiz_result"].insert_one({
+                "quiz_id": req.quiz_id,
+                "user": doc["user"],
+                "topic": doc["topic"],
+                "lang": doc.get("lang", "en"),
+                "total": total,
+                "correct": correct,
+                "score": score,
+                "points": points,
+                "details": details,
+                "created_at": datetime.now(timezone.utc)
+            })
+        return QuizSubmitResponse(quiz_id=req.quiz_id, user=doc["user"], topic=doc["topic"], lang=doc.get("lang", "en"), total=total, correct=correct, score=score, points=points)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to grade quiz")
+
+@app.get("/api/report/{user}")
+def report_card(user: str):
+    summary = {"user": user, "points": 0, "quizzes": 0, "per_topic": {}, "recent": []}
+    try:
+        from database import db
+        if db is None:
+            return summary
+        cursor = db["quiz_result"].find({"user": user}).sort("created_at", -1)
+        results = list(cursor)
+        summary["quizzes"] = len(results)
+        for r in results:
+            summary["points"] += int(r.get("points", 0))
+            t = r.get("topic")
+            pt = summary["per_topic"].setdefault(t, {"attempts": 0, "best": 0.0, "avg": 0.0})
+            pt["attempts"] += 1
+            pt["avg"] = ((pt["avg"] * (pt["attempts"] - 1)) + float(r.get("score", 0))) / pt["attempts"]
+            pt["best"] = max(pt["best"], float(r.get("score", 0)))
+        summary["recent"] = [{
+            "quiz_id": r.get("quiz_id"),
+            "topic": r.get("topic"),
+            "score": r.get("score"),
+            "points": r.get("points"),
+        } for r in results[:10]]
+        return summary
+    except Exception:
+        return summary
 
 @app.get("/test")
 def test_database():
